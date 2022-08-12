@@ -1,0 +1,362 @@
+---
+title: "Monocle analysis for SPIG1"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(monocle)
+library(ggbiplot)
+library(gridExtra)
+library(tsne)
+library(corrplot)
+library(dplyr)
+library(reshape)
+library(openxlsx)
+```
+
+```{r}
+setwd("/xx/xx")
+fpkms<-read.delim("genes.fpkm_table",row.names=1)
+gene_ann<-read.delim("genes.attr_table")
+#isoform_ann=read.delim("isoforms.attr_table")
+
+#extract gene_id (i.e., ENSMUSG ID) associated with gene_short name
+#subset(gene_ann, gene_short_name %in% "your_favorite_gene")
+
+rownames(gene_ann)<-gene_ann$tracking_id
+#rownames(isoform_ann)<-isoform_ann$tracking_id
+#reorder fpkms column names in same order as samples.table
+ordered_fpkms=fpkms[,order(colnames(fpkms),decreasing=FALSE)]
+#convert ordered_fpkms from data.frame to matrix
+ordered_fpkms=as.matrix(ordered_fpkms)
+##Isoform FPKMs
+#isoform_fpkms<-read.delim("isoforms.fpkm_table")
+#row.names(isoform_fpkms) <- isoform_fpkms$tracking_id
+#isoform_fpkms <- isoform_fpkms[,-1]
+#[,-1] removes first column from data frame
+#ordered_isoform_fpkms=isoform_fpkms[,order(colnames(isoform_fpkms),decreasing=FALSE)]
+#ordered_isoform_fpkms=as.matrix(ordered_isoform_fpkms)
+##Sample Annotation
+sample_ann<-read.delim("samples.table")
+rownames(sample_ann)<-sample_ann$sample_id
+ordered_sample_ann=sample_ann[order(rownames(sample_ann),decreasing=FALSE),]
+#sample_info.txt is a tab-delimited text file that has all your cell attributes
+master_cell_sheet<-read.delim("sample_info.txt",stringsAsFactors=F)
+rownames(master_cell_sheet)<-master_cell_sheet$sample_id
+ordered_master_cell_sheet=master_cell_sheet[order(rownames(master_cell_sheet),decreasing=FALSE),]
+
+#Remove Rbpms- cells and U8_11
+ordered_fpkms=subset(ordered_fpkms, select=-c(P10_2, P10_22, P10_68, P10_76, P10_78, P10_84, P10_58, D8_2, P10_14, P10_80, P10_33, P10_4, P10_85, P10_21, P10_20, P10_67, P10_44, P10_17, D12_8, D12_23, P10_89, P10_73, P10_52, P10_63, P10_30, P10_29, P10_10, U8_11))
+
+#ordered_isoform_fpkms=subset(ordered_isoform_fpkms, select=-c(P10_2, P10_22, P10_68, P10_76, P10_78, P10_84, P10_58, D8_2, P10_14, P10_80, P10_33, P10_4, P10_85, P10_21, P10_20, P10_67, P10_44, P10_17, D12_8, D12_23, P10_89, P10_73, P10_52, P10_63, P10_30, P10_29, P10_10, U8_11))
+
+ordered_sample_ann=ordered_sample_ann[!rownames(ordered_sample_ann) %in% c("P10_2", "P10_22", "P10_68", "P10_76", "P10_78", "P10_84", "P10_58", "D8_2", "P10_14", "P10_80", "P10_33", "P10_4", "P10_85", "P10_21", "P10_20", "P10_67", "P10_44", "P10_17", "D12_8", "D12_23", "P10_89", "P10_73", "P10_52", "P10_63", "P10_30", "P10_29", "P10_10", "U8_11"), ]
+
+ordered_master_cell_sheet=ordered_master_cell_sheet[!rownames(ordered_master_cell_sheet) %in% c("P10_2", "P10_22", "P10_68", "P10_76", "P10_78", "P10_84", "P10_58", "D8_2", "P10_14", "P10_80", "P10_33", "P10_4", "P10_85", "P10_21", "P10_20", "P10_67", "P10_44", "P10_17", "D12_8", "D12_23", "P10_89", "P10_73", "P10_52", "P10_63", "P10_30", "P10_29", "P10_10", "U8_11"), ]
+
+#remove all Pcdh9-Cre cells
+ordered_fpkms=ordered_fpkms[,-grep("^P",colnames(ordered_fpkms))]
+#ordered_isoform_fpkms=ordered_isoform_fpkms[,-grep("^P",colnames(ordered_isoform_fpkms))]
+ordered_sample_ann=ordered_sample_ann[-grep("^P",rownames(ordered_sample_ann)),]
+ordered_master_cell_sheet=ordered_master_cell_sheet[-grep("^P",rownames(ordered_master_cell_sheet)),]
+
+#only include cells in Cluster 1 (small group Downs)
+#clus1cells=read.xlsx("../Results/Monocle/SPIG1 Up vs Down vs Pcdh9/Excel sheets/Cells belonging to each cluster.xlsx")
+#clus1cells=clus1cells[clus1cells$cluster_id==1,1]
+#ordered_fpkms=subset(ordered_fpkms, select=c(clus1cells))
+#ordered_isoform_fpkms=subset(ordered_isoform_fpkms, select=c(clus1cells))
+#ordered_sample_ann=ordered_sample_ann[rownames(ordered_sample_ann) %in% c(clus1cells), ]
+#ordered_master_cell_sheet=ordered_master_cell_sheet[rownames(ordered_master_cell_sheet) %in% c(clus1cells), ]
+
+#merge your cell attribute file with cuffnorm's sample annotation file
+sample_info<-merge(ordered_sample_ann,ordered_master_cell_sheet,by.x=0,by.y='sample_id',all.x=TRUE,sort=FALSE)
+rownames(sample_info)<-sample_info$sample_id
+sample_info<-sample_info[,-1]
+fd<-new("AnnotatedDataFrame",data=gene_ann)
+pd<-new("AnnotatedDataFrame",data=sample_info)
+```
+
+```{r}
+#Alternative way of making CellDataSet object (based on Monocle vignette, Feb 2018)
+dat.relative <- newCellDataSet(ordered_fpkms,
+                phenoData = pd,
+                featureData = fd,
+                lowerDetectionLimit = 0.1,
+                expressionFamily = tobit(Lower = 0.1))
+
+fpkm_matrix_adj <- relative2abs(dat.relative, method = "num_genes")
+
+dat <- newCellDataSet(as.matrix(fpkm_matrix_adj),
+                phenoData = pd,
+                featureData = fd,
+                lowerDetectionLimit = 0.5,
+                expressionFamily = negbinomial())
+
+dat <- estimateSizeFactors(dat)
+dat <- estimateDispersions(dat)
+```
+
+```{r}
+#QC filtering based on new Monocle2 vignette (Feb 2018)
+
+#Calculate total RNA mass per cell
+pData(dat)$Total_mRNAs <- Matrix::colSums(exprs(dat))
+
+#plot mRNA distribution for all cells +/- 2 SDs
+#dat <- dat[,pData(dat)$Total_mRNAs < 1e6]
+
+upper_bound <- 10^(mean(log10(pData(dat)$Total_mRNAs)) +
+            2*sd(log10(pData(dat)$Total_mRNAs)))
+lower_bound <- 10^(mean(log10(pData(dat)$Total_mRNAs)) -
+            2*sd(log10(pData(dat)$Total_mRNAs)))
+
+#highcells <- dat[,row.names(subset(pData(dat), Total_mRNAs >= upper_bound))]
+#lowcells <- dat[,row.names(subset(pData(dat), Total_mRNAs <= lower_bound))]
+
+#print name of cells with mRNAs >=22000
+#pData(highcells)$sample_id
+#pData(lowcells)$sample_id
+
+#print plot
+#qplot(Total_mRNAs, data = pData(dat), geom = "density") +
+#geom_vline(xintercept = lower_bound) +
+#geom_vline(xintercept = upper_bound)
+
+#exclude cells outside boundaries
+dat <- dat[,pData(dat)$Total_mRNAs > lower_bound &
+      pData(dat)$Total_mRNAs < upper_bound]
+dat <- detectGenes(dat, min_expr = 0.1)
+
+#does mRNA distribution follow log-normal distribution?
+#expressed_genes <- row.names(subset(fData(dat),num_cells_expressed >= 4))
+#L <- log(exprs(dat[expressed_genes,]))
+#melted_dens_df <- melt(Matrix::t(scale(Matrix::t(L))))
+
+#plot mRNA distribution and log-normal distribution
+#qplot(value, geom = "density", data = melted_dens_df) +
+#stat_function(fun = dnorm, size = 0.5, color = 'red') +
+#xlab("Standardized log(FPKM)") +
+#ylab("Density")
+```
+
+```{r}
+#Check for neuronal and RGC genes
+
+#Just Rbpms and Tubb3
+to_be_tested <- row.names(subset(fData(dat), gene_short_name %in% c("Rbpms","Tubb3")))
+
+cds_subset <- dat[to_be_tested,]
+
+plot_genes_jitter(cds_subset, grouping="age", color_by="group",
+nrow=1, ncol=NULL, plot_trend=TRUE)
+
+#print expression values for gene X for all samples and write to excel file
+write.xlsx(cds_subset,"example.xlsx")
+```
+
+```{r}
+#PCA
+
+numCellThreshold<-4
+expressed_genes<-row.names(subset(fData(dat),num_cells_expressed >= numCellThreshold))
+cds_subset=dat[expressed_genes,]
+
+#PCA done on filtered cells (thresh = 5 cells)
+dat.pca<-prcomp(t(log10(exprs(cds_subset)+1)),center=TRUE,scale=TRUE)
+
+#summary of PCA
+summary(dat.pca)
+
+#PCA plot
+#include "labels=pData(dat)$sample_id" if you want to label samples on plot
+ggbiplot(dat.pca,choices=c(1,2),scale=0,groups=pData(dat)$group,ellipse=F,var.axes=F) + theme_bw()
+
+```
+
+```{r}
+#Clustering - based on new Monocle2 vignette (Feb 2018)
+
+#Cluster based on high variance genes
+disp_table <- dispersionTable(dat)
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.1)
+dat <- setOrderingFilter(dat, unsup_clustering_genes$gene_id)
+plot_ordering_genes(dat)
+
+#plot variance vs. components
+plot_pc_variance_explained(dat, return_all = F)
+
+#default perplexity for Rtsne function is 30
+dat <- reduceDimension(dat,
+                       max_components = 2,
+                       num_dim = 6,
+                       reduction_method = 'tSNE',
+                       residualModelFormulaStr = "~age + block + plate + run + num_genes_expressed",
+                       verbose = T)
+
+dat <- clusterCells(dat, num_clusters=2)
+
+#print tSNE plot
+plot_cell_clusters(dat, 1, 2, color = "group2")
+
+#print tSNE plot according to unsupervised clusters
+plot_cell_clusters(dat, 1, 2, color = "Cluster") + facet_wrap(~group2)
+
+```
+
+```{r}
+#Semi-supervised clustering
+
+#Use Fstl4 (SPIG1) as marker gene
+
+Fstl4_id <- row.names(subset(fData(dat), gene_short_name == "Fstl4"))
+Fibcd1_id <- row.names(subset(fData(dat), gene_short_name == "Fibcd1"))
+
+cth <- newCellTypeHierarchy()
+cth <- addCellType(cth, "Up", classify_func =
+    function(x) { x[Fstl4_id,] >= 1 })
+cth <- addCellType(cth, "Down", classify_func =
+    function(x) { x[Fibcd1_id,] >= 1 })
+
+dat <- classifyCells(dat, cth, 0.1)
+
+#Generate table of Fstl4+ cells
+table(pData(dat)$CellType)
+
+#find genes that covary with markers (Fstl4, in this case)
+marker_diff <- markerDiffTable(dat[expressed_genes,],
+            cth,
+            residualModelFormulaStr = "~block + plate + run + num_genes_expressed",
+            cores = 1)
+
+candidate_clustering_genes <- row.names(subset(marker_diff, qval < 0.01))
+
+marker_spec <- calculateMarkerSpecificity(dat[candidate_clustering_genes,], cth)
+
+#following command gives you genes that are most specific for the class of interest
+head(selectTopMarkers(marker_spec, 3))
+
+#extract gene_short_name from gene_ann given ENGMUSG gene names
+#trialnames=vector of ENGMUSG gene names (can subset from selectTopMarkers above)
+#gene_ann[trialnames,]$gene_short_name
+
+#cluster genes based on top 500 markers for Up cells and Down cells
+semisup_clustering_genes <- unique(selectTopMarkers(marker_spec, 500)$gene_id)
+dat <- setOrderingFilter(dat, semisup_clustering_genes)
+plot_ordering_genes(dat)
+
+plot_pc_variance_explained(dat, return_all = F)
+
+dat <- reduceDimension(dat,
+  max_components = 2,
+  num_dim = 6,
+  norm_method = 'log',
+  reduction_method = 'tSNE',
+  residualModelFormulaStr = "~block + plate + run + num_genes_expressed",
+  verbose = T)
+
+dat <- clusterCells(dat, num_clusters = 4)
+plot_cell_clusters(dat, 1, 2, color = "Cluster") + facet_wrap(~group2)
+
+#visualize expression of gene of interest in clusters
+plot_cell_clusters(dat, 1, 2, color = "group2", markers = c("Emcn", "Shisa3","Gm43050"))
+
+#determine cells belonging to each cluster
+
+cell_id=pData(dat)$sample_id
+cluster_id=pData(dat)$Cluster
+cell_id=as.matrix(cell_id)
+cluster_id=as.matrix(cluster_id)
+cells=cbind(cell_id, cluster_id)
+
+#make excel file listing cells in each cluster
+write.xlsx(cells,"cells_in_cluster.xlsx")
+
+```
+
+```{r}
+#Differential expression - based on most recent Monocle2 vignette (Feb 2018)
+
+#Expressed genes with expression in >=15 cells
+numCellThreshold<-4
+expressed_genes<-row.names(subset(fData(dat),num_cells_expressed >= numCellThreshold))
+
+cds_subset=dat[expressed_genes,]
+
+#this takes ~25 min with ~180 cells
+difftest=differentialGeneTest(cds_subset,fullModelFormulaStr="~age + block + plate + run + num_genes_expressed",reducedModelFormulaStr="~block + plate + run + num_genes_expressed")
+
+#direction x age interaction
+difftest=differentialGeneTest(cds_subset,fullModelFormulaStr="~direction*age + block + plate + num_genes_expressed",reducedModelFormulaStr="~direction + age + block + plate + num_genes_expressed")
+
+#select genes with q<0.05
+sig_genes <- subset(difftest, qval < 0.05)
+
+#list gene name, p-value, and q-value
+genelist=sig_genes[,c("gene_short_name", "pval", "qval")]
+
+#sort genelist by q-value
+sortedgenelist=genelist[order(genelist[,3]), ]
+
+#save sorted gene list to excel file
+write.xlsx(sortedgenelist,"newlist.xlsx")
+
+#plot gene expression
+to_be_tested <- row.names(subset(fData(dat), gene_short_name %in% c("UBC", "NCAM1", "ANPEP")))
+
+cds_subset <- dat[to_be_tested,]
+
+#print expression values for gene X for all samples and write to excel file
+write.xlsx(cds_subset,"example.xlsx")
+
+plot_genes_jitter(cds_subset, grouping="age", color_by="direction",
+nrow=1, ncol=NULL, plot_trend=TRUE)
+
+#can include num_genes_expressed as a nuisance variable in both full and reduced models
+difftest=differentialGeneTest(cds_subset,fullModelFormulaStr="~direction*age + num_genes_expressed",reducedModelFormulaStr="~direction + age + num_genes_expressed")
+```
+
+```{r}
+#Pseudotime - Supervised ordering using differentialGeneTest between P4 and P12
+
+difftest=differentialGeneTest(cds_subset,fullModelFormulaStr="~age + num_genes_expressed",reducedModelFormulaStr="~num_genes_expressed")
+
+#order based on genes with q < 0.01
+ordering_genes <- row.names (subset(difftest, qval < 0.01))
+
+dat <- setOrderingFilter(dat, ordering_genes)
+dat <- reduceDimension(dat, max_components=2, method='DDRTree')
+dat <- orderCells(dat, reverse=TRUE)
+
+#plot pseudotime trajectory, grouping by age
+plot_cell_trajectory(dat, color_by="age")
+
+#plot as function of pseudotime
+plot_cell_trajectory(dat, color_by="Pseudotime")
+
+#test for genes that are differentially expressed as function of pseudotime
+#here, cds_subset is "expressed_genes"
+
+numCellThreshold<-4
+expressed_genes<-row.names(subset(fData(dat),num_cells_expressed >= numCellThreshold))
+cds_subset=dat[expressed_genes,]
+
+diff_test_res <- differentialGeneTest(cds_subset, fullModelFormulaStr="~sm.ns(Pseudotime) + block + plate + run + num_genes_expressed", reducedModelFormulaStr = "~block + plate + run + num_genes_expressed")
+
+sig_genes <- subset(diff_test_res, qval < 0.05)
+genelist=sig_genes[,c("gene_short_name", "pval", "qval")]
+sortedgenelist=genelist[order(genelist[,3]), ]
+
+#save sorted gene list to excel file
+library(xlsx)
+write.xlsx(sortedgenelist,"newlist.xlsx")
+
+#plot gene expression as function of pseudotime
+my_genes <- row.names(subset(fData(dat), gene_short_name %in% c("Npy", "Gm42418", "Auts2")))
+
+cds_subset <- dat[my_genes,]
+
+plot_genes_in_pseudotime(cds_subset, color_by="age")
+
+```
